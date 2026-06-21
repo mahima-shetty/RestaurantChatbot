@@ -12,45 +12,67 @@ RANDOM_SEED = 20260621
 CUSTOMER_COUNT = 60
 SALES_COUNT = 360
 
-FIRST_NAMES = [
-    "John",
-    "Priya",
-    "Maria",
-    "Ethan",
-    "Aisha",
-    "Liam",
-    "Sophia",
-    "Arjun",
-    "Olivia",
-    "Noah",
-    "Fatima",
-    "Daniel",
-    "Isabella",
-    "Kabir",
-    "Meera",
-    "Lucas",
-    "Zara",
-    "Henry",
-    "Anaya",
-    "Mateo",
-]
-
-LAST_NAMES = [
-    "Carter",
-    "Shah",
-    "Lopez",
-    "Brooks",
-    "Khan",
-    "Turner",
-    "Nguyen",
-    "Mehta",
-    "Reed",
-    "Kim",
-    "Ali",
-    "Ross",
-    "Patel",
-    "Singh",
-    "Garcia",
+CUSTOMER_NAMES = [
+    "John Carter",
+    "Priya Shah",
+    "Maria Lopez",
+    "Ethan Brooks",
+    "Aisha Khan",
+    "Liam Turner",
+    "Sophia Nguyen",
+    "Arjun Mehta",
+    "Olivia Reed",
+    "Noah Kim",
+    "Fatima Ali",
+    "Daniel Ross",
+    "Isabella Patel",
+    "Kabir Singh",
+    "Meera Garcia",
+    "Lucas Bennett",
+    "Zara Coleman",
+    "Henry Foster",
+    "Anaya Griffin",
+    "Mateo Hughes",
+    "Nina Parker",
+    "Rohan Das",
+    "Elena Morris",
+    "Vivaan Iyer",
+    "Clara Murphy",
+    "Aarav Nair",
+    "Mila Cooper",
+    "Ishaan Rao",
+    "Layla Price",
+    "Dev Malhotra",
+    "Ava Peterson",
+    "Kian Sethi",
+    "Sara Wallace",
+    "Reyansh Kapoor",
+    "Leah Russell",
+    "Aditya Menon",
+    "Hannah Jenkins",
+    "Krish Bansal",
+    "Ruby Howard",
+    "Vihaan Chawla",
+    "Sana Mirza",
+    "Aryan Desai",
+    "Tara Wood",
+    "Yash Arora",
+    "Maya Butler",
+    "Neel Joshi",
+    "Pooja Anand",
+    "Veer Tandon",
+    "Ira Bhatt",
+    "Ayaan Gulati",
+    "Riya Suri",
+    "Dhruv Bedi",
+    "Myra Sinha",
+    "Arnav Kohli",
+    "Nora Dutta",
+    "Parth Talwar",
+    "Siya Batra",
+    "Rudra Sachdeva",
+    "Kiara Wadhwa",
+    "Shaurya Luthra",
 ]
 
 DIETARY_PREFERENCES = [
@@ -131,10 +153,9 @@ def build_customers() -> pd.DataFrame:
 
     for index in range(CUSTOMER_COUNT):
         customer_id = 1001 + index
-        first_name = FIRST_NAMES[index % len(FIRST_NAMES)]
-        last_name = LAST_NAMES[(index * 3) % len(LAST_NAMES)]
-        name = f"{first_name} {last_name}"
-        email = f"{first_name.lower()}.{last_name.lower()}{customer_id}@example.com"
+        name = CUSTOMER_NAMES[index]
+        email_local_part = name.lower().replace(" ", ".")
+        email = f"{email_local_part}{customer_id}@example.com"
         dietary_preference = DIETARY_PREFERENCES[index % len(DIETARY_PREFERENCES)]
 
         customer_rows.append(
@@ -153,7 +174,8 @@ def build_sales() -> pd.DataFrame:
     """Create a larger deterministic table of sample food orders and bill amounts."""
     random_generator = random.Random(RANDOM_SEED)
     start_date = date(2025, 1, 1)
-    customer_ids = list(range(1001, 1001 + CUSTOMER_COUNT))
+    customers = build_customers()
+    customer_ids = customers["customer_id"].tolist()
     sales_rows: list[dict[str, object]] = []
 
     for order_offset in range(SALES_COUNT):

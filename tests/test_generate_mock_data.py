@@ -9,11 +9,14 @@ from generate_mock_data import build_customers, build_sales
 
 def test_build_customers_has_no_missing_dietary_preferences() -> None:
     customers = build_customers()
+    first_names = customers["name"].str.split().str[0]
 
     assert customers["dietary_preferences"].isna().sum() == 0
     assert "No preference" in customers["dietary_preferences"].tolist()
     assert len(customers) >= 60
     assert customers["customer_id"].is_unique
+    assert customers["name"].is_unique
+    assert first_names.is_unique
 
 
 def test_customers_excel_round_trip_preserves_dietary_preferences(tmp_path: Path) -> None:
@@ -47,3 +50,13 @@ def test_build_sales_customer_ids_exist_in_customers() -> None:
 
     customer_ids = set(customers["customer_id"])
     assert set(sales["customer_id"]).issubset(customer_ids)
+
+
+def test_build_sales_references_unique_customer_dimension() -> None:
+    customers = build_customers()
+    sales = build_sales()
+
+    merged = sales.merge(customers[["customer_id", "name"]], on="customer_id", how="left")
+
+    assert merged["name"].isna().sum() == 0
+    assert customers["name"].nunique() == len(customers)

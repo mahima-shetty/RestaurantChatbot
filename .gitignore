@@ -8,3 +8,4 @@ venv/
 .env
 .agents/
 data/*.xlsx
+log/log_run.txt

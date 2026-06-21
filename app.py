@@ -9,7 +9,15 @@ from typing import Any
 
 from openai import OpenAI
 
-from query_engine import execute_pandas_query
+from run_logger import initialize_run_log, log_event, traced
+from query_engine import (
+    execute_pandas_query,
+    get_customer_ids_by_name,
+    get_customers_for_month_year,
+    get_orders_by_customer_name,
+    get_preference_summary_for_month_year,
+    get_total_bill_for_month_year,
+)
 
 
 PANDAS_QUERY_EXAMPLES = [
@@ -62,6 +70,13 @@ When you call the tool, write pandas code against the preloaded DataFrames exact
 For user-provided text values, prefer case-insensitive matching unless the user explicitly asks for exact case-sensitive matching.
 Examples:
 {PANDAS_QUERY_EXAMPLES_TEXT}
+Prefer the domain tools first when they match the user's request:
+- use get_total_bill_for_month_year(month, year) for total bill / total cost questions by month and year
+- use get_customers_for_month_year(month, year) for listing customers who ordered in a given month and year
+- use get_preference_summary_for_month_year(month, year) for majority / most common / popular dietary preference questions by month and year
+- use get_customer_ids_by_name(name_query) for customer ID lookups by customer name
+- use get_orders_by_customer_name(name_query) for questions about what a named customer ordered
+Use execute_pandas_query only when the domain tools do not fit the user's request.
 Treat sales_df['date'] as a datetime column. For natural-language date questions like '19 June', 'June 19', '19th June', or '2026-06-19', filter using .dt.day, .dt.month, .dt.year, or normalized date strings instead of .str.contains on the raw date column.
 Use columns correctly:
 - order_id and customer_id are numeric IDs
@@ -125,6 +140,123 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "get_customer_ids_by_name",
+            "description": (
+                "Return customer IDs and names for customers whose names match a text query. "
+                "Use this for questions like 'what is Daniel customer id' or 'show Priya's customer id'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_query": {
+                        "type": "string",
+                        "description": "Full or partial customer name to search case-insensitively.",
+                    }
+                },
+                "required": ["name_query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_orders_by_customer_name",
+            "description": (
+                "Return orders for customers whose names match a text query, including customer_id, name, order_id, items_ordered, bill_amount, and date. "
+                "Use this for questions like 'what did Daniel order' or 'show orders for Priya'."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "name_query": {
+                        "type": "string",
+                        "description": "Full or partial customer name to search case-insensitively.",
+                    }
+                },
+                "required": ["name_query"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_total_bill_for_month_year",
+            "description": (
+                "Return the total bill amount for all restaurant orders in a given month and year. "
+                "Use this for requests asking for the total bill, total sales, or total cost in a period like December 2025."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {
+                        "type": "integer",
+                        "description": "Month number from 1 to 12.",
+                    },
+                    "year": {
+                        "type": "integer",
+                        "description": "4-digit year like 2025 or 2026.",
+                    },
+                },
+                "required": ["month", "year"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_customers_for_month_year",
+            "description": (
+                "Return the unique customers who placed orders in a given month and year, including their customer_id, name, and dietary_preferences. "
+                "Use this for requests like listing customers who ordered in December 2025."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {
+                        "type": "integer",
+                        "description": "Month number from 1 to 12.",
+                    },
+                    "year": {
+                        "type": "integer",
+                        "description": "4-digit year like 2025 or 2026.",
+                    },
+                },
+                "required": ["month", "year"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_preference_summary_for_month_year",
+            "description": (
+                "Return the dietary preference distribution for unique customers who ordered in a given month and year. "
+                "Use this for questions about majority, most common, top, or popular customer preferences in a period like November 2025."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "month": {
+                        "type": "integer",
+                        "description": "Month number from 1 to 12.",
+                    },
+                    "year": {
+                        "type": "integer",
+                        "description": "4-digit year like 2025 or 2026.",
+                    },
+                },
+                "required": ["month", "year"],
+                "additionalProperties": False,
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "execute_pandas_query",
             "description": (
                 "Execute a raw pandas Python expression against two already-loaded DataFrames. "
@@ -166,6 +298,20 @@ ENV_FILE = Path(__file__).resolve().parent / ".env"
 DEFAULT_OPENAI_MODEL = "gpt-4o-mini"
 DEFAULT_GROQ_MODEL = "llama-3.1-8b-instant"
 MAX_HISTORY_MESSAGES = 6
+MONTH_NAME_TO_NUMBER = {
+    "jan": 1,
+    "feb": 2,
+    "mar": 3,
+    "apr": 4,
+    "may": 5,
+    "jun": 6,
+    "jul": 7,
+    "aug": 8,
+    "sep": 9,
+    "oct": 10,
+    "nov": 11,
+    "dec": 12,
+}
 
 MONTH_NAME_PATTERN = re.compile(
     r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
@@ -176,6 +322,7 @@ YEAR_PATTERN = re.compile(r"\b(?:19|20)\d{2}\b")
 NUMERIC_MONTH_DAY_PATTERN = re.compile(r"\b\d{1,2}[/-]\d{1,2}\b")
 
 
+@traced
 def load_env_file(env_path: Path = ENV_FILE) -> None:
     """Load simple KEY=VALUE pairs from a local .env file into os.environ.
 
@@ -198,6 +345,7 @@ def load_env_file(env_path: Path = ENV_FILE) -> None:
             os.environ[key] = value
 
 
+@traced
 def _get_groq_api_key() -> str | None:
     """Return a Groq API key from any supported environment variable name."""
     return (
@@ -207,6 +355,7 @@ def _get_groq_api_key() -> str | None:
     )
 
 
+@traced
 def get_llm_client_and_model(model: str | None = None) -> tuple[OpenAI, str, str]:
     """Create a configured LLM client and choose the provider/model from env.
 
@@ -255,6 +404,7 @@ def get_llm_client_and_model(model: str | None = None) -> tuple[OpenAI, str, str
     )
 
 
+@traced
 def _get_recent_history(conversation_history: list[dict[str, str]] | None) -> list[dict[str, str]]:
     """Keep only the latest user/assistant messages for short conversational context."""
     if not conversation_history:
@@ -267,6 +417,7 @@ def _get_recent_history(conversation_history: list[dict[str, str]] | None) -> li
     ]
 
 
+@traced
 def _question_mentions_date_without_year(user_input: str) -> bool:
     """Return True when a question references a date but omits the year."""
     if YEAR_PATTERN.search(user_input):
@@ -277,12 +428,129 @@ def _question_mentions_date_without_year(user_input: str) -> bool:
     return has_month_name or has_numeric_month_day
 
 
+@traced
 def _extract_year(user_input: str) -> str | None:
     """Extract a 4-digit year from the user's reply."""
     match = YEAR_PATTERN.search(user_input)
     return match.group(0) if match else None
 
 
+@traced
+def _extract_month_and_year(user_input: str) -> tuple[int, int] | None:
+    """Extract a month and year from user input when both are present."""
+    month_match = MONTH_NAME_PATTERN.search(user_input)
+    year_text = _extract_year(user_input)
+
+    if not month_match or not year_text:
+        return None
+
+    month_key = month_match.group(0).lower()[:3]
+    month_number = MONTH_NAME_TO_NUMBER.get(month_key)
+    if month_number is None:
+        return None
+
+    return month_number, int(year_text)
+
+
+@traced
+def _build_preference_summary_query(user_input: str) -> str | None:
+    """Build a deterministic query for dietary preference summary questions."""
+    normalized_input = user_input.lower()
+    asks_about_preferences = (
+        "preference" in normalized_input or "dietary" in normalized_input
+    )
+    asks_for_summary = any(
+        phrase in normalized_input
+        for phrase in ("majority", "most common", "top", "popular")
+    )
+
+    month_and_year = _extract_month_and_year(user_input)
+    if not asks_about_preferences or not asks_for_summary or month_and_year is None:
+        return None
+
+    month_number, year_number = month_and_year
+    return (
+        "sales_df.loc["
+        f"(sales_df['date'].dt.month == {month_number}) & "
+        f"(sales_df['date'].dt.year == {year_number}), ['customer_id']]"
+        ".drop_duplicates()"
+        ".merge(customers_df[['customer_id', 'dietary_preferences']], on='customer_id', how='left')"
+        "['dietary_preferences']"
+        ".value_counts()"
+        ".rename_axis('dietary_preferences')"
+        ".reset_index(name='customer_count')"
+    )
+
+
+@traced
+def _route_domain_tool_from_text(
+    user_input: str,
+) -> tuple[str, dict[str, int]] | None:
+    """Match certain questions to explicit domain-level tools."""
+    normalized_input = user_input.lower()
+    words = re.findall(r"[a-zA-Z]+", user_input)
+
+    if any(phrase in normalized_input for phrase in ("cust_id", "customer id", "customer_id")):
+        stop_words = {"what", "is", "customer", "cust", "id"}
+        candidate_words = [word for word in words if word.lower() not in stop_words]
+        if candidate_words:
+            return ("get_customer_ids_by_name", {"name_query": candidate_words[0]})
+
+    month_and_year = _extract_month_and_year(user_input)
+    if month_and_year is not None:
+        month_number, year_number = month_and_year
+
+        if (
+            ("preference" in normalized_input or "dietary" in normalized_input)
+            and any(
+                phrase in normalized_input
+                for phrase in ("majority", "most common", "top", "popular")
+            )
+        ):
+            return (
+                "get_preference_summary_for_month_year",
+                {"month": month_number, "year": year_number},
+            )
+
+        if (
+            any(word in normalized_input for word in ("total", "sum"))
+            and any(word in normalized_input for word in ("bill", "cost", "sales"))
+        ):
+            return (
+                "get_total_bill_for_month_year",
+                {"month": month_number, "year": year_number},
+            )
+
+        if "customer" in normalized_input and any(
+            word in normalized_input for word in ("list", "show", "who", "ordered")
+        ):
+            return (
+                "get_customers_for_month_year",
+                {"month": month_number, "year": year_number},
+            )
+
+    if any(phrase in normalized_input for phrase in ("what did", "show orders", "ordered")):
+        stop_words = {
+            "what",
+            "did",
+            "show",
+            "orders",
+            "order",
+            "ordered",
+            "customer",
+            "in",
+        }
+        candidate_words = [word for word in words if word.lower() not in stop_words]
+        if candidate_words:
+            return (
+                "get_orders_by_customer_name",
+                {"name_query": candidate_words[0]},
+            )
+
+    return None
+
+
+@traced
 def _assistant_message_to_dict(message: Any) -> dict[str, Any]:
     """Turn the model's reply into a plain dictionary that can be reused later.
 
@@ -310,26 +578,50 @@ def _assistant_message_to_dict(message: Any) -> dict[str, Any]:
     return payload
 
 
+@traced
 def _run_tool_call(tool_name: str, arguments_json: str) -> str:
     """Run one requested tool locally and return its output as text.
 
     Right now this only supports the pandas query tool used for reading the
     restaurant data.
     """
-    if tool_name != "execute_pandas_query":
-        return f"Unsupported tool: {tool_name}"
-
     try:
         arguments = json.loads(arguments_json or "{}")
-        code_string = arguments["code_string"]
-        print("\nGenerated pandas code:")
-        print(code_string)
-        print()
-        return execute_pandas_query(code_string)
+
+        if tool_name == "execute_pandas_query":
+            code_string = arguments["code_string"]
+            print("\nGenerated pandas code:")
+            print(code_string)
+            print()
+            return execute_pandas_query(code_string)
+
+        if tool_name == "get_customer_ids_by_name":
+            return get_customer_ids_by_name(name_query=arguments["name_query"])
+
+        if tool_name == "get_orders_by_customer_name":
+            return get_orders_by_customer_name(name_query=arguments["name_query"])
+
+        if tool_name == "get_total_bill_for_month_year":
+            return get_total_bill_for_month_year(
+                month=int(arguments["month"]), year=int(arguments["year"])
+            )
+
+        if tool_name == "get_customers_for_month_year":
+            return get_customers_for_month_year(
+                month=int(arguments["month"]), year=int(arguments["year"])
+            )
+
+        if tool_name == "get_preference_summary_for_month_year":
+            return get_preference_summary_for_month_year(
+                month=int(arguments["month"]), year=int(arguments["year"])
+            )
+
+        return f"Unsupported tool: {tool_name}"
     except Exception:
         return traceback.format_exc()
 
 
+@traced
 def _clean_generated_expression(response_text: str) -> str:
     """Normalize model output into a bare pandas expression string."""
     cleaned = (response_text or "").strip()
@@ -342,9 +634,13 @@ def _clean_generated_expression(response_text: str) -> str:
     if cleaned.lower().startswith("python\n"):
         cleaned = cleaned.split("\n", 1)[1].strip()
 
+    if "To answer the question:" in cleaned:
+        cleaned = cleaned.split("To answer the question:", 1)[1].strip()
+
     return cleaned.strip().strip("`")
 
 
+@traced
 def _execute_generated_query(code_string: str) -> str:
     """Print and execute a generated pandas expression."""
     print("\nGenerated pandas code:")
@@ -353,6 +649,7 @@ def _execute_generated_query(code_string: str) -> str:
     return execute_pandas_query(code_string)
 
 
+@traced
 def _format_query_output_for_user(query_output: str) -> str:
     """Convert raw pandas output into a tool-grounded user-facing response."""
     cleaned_output = (query_output or "").strip()
@@ -380,6 +677,7 @@ def _format_query_output_for_user(query_output: str) -> str:
     return f"Here are the matching records:\n{cleaned_output}"
 
 
+@traced
 def _repair_generated_query(
     client: OpenAI,
     selected_model: str,
@@ -407,6 +705,7 @@ def _repair_generated_query(
     return _clean_generated_expression(repair_response.choices[0].message.content or "")
 
 
+@traced
 def _fallback_chatbot_response(
     client: OpenAI,
     selected_model: str,
@@ -419,6 +718,15 @@ def _fallback_chatbot_response(
     Step 2: execute it locally.
     Step 3: ask the model to summarize the result for the user.
     """
+    routed_tool = _route_domain_tool_from_text(user_input)
+    if routed_tool is not None:
+        tool_name, tool_arguments = routed_tool
+        log_event(f"Using routed domain tool: {tool_name}")
+        tool_output = _run_tool_call(tool_name, json.dumps(tool_arguments))
+        if tool_output.startswith("Traceback"):
+            raise RuntimeError(f"Generated pandas query failed:\n{tool_output}")
+        return _format_query_output_for_user(tool_output)
+
     query_response = client.chat.completions.create(
         model=selected_model,
         messages=[
@@ -456,6 +764,7 @@ def _fallback_chatbot_response(
     raise RuntimeError(f"Generated pandas query failed:\n{latest_error}")
 
 
+@traced
 def get_chatbot_response(
     user_input: str,
     conversation_history: list[dict[str, str]] | None = None,
@@ -513,11 +822,14 @@ def get_chatbot_response(
     return "The model did not produce a final response after multiple tool calls."
 
 
+@traced
 def main() -> None:
     """Run a simple command-line chat loop until the user types exit or quit."""
     load_env_file()
     conversation_history: list[dict[str, str]] = []
     pending_date_question: str | None = None
+
+    log_event("Application chat loop started")
 
     print("Restaurant chatbot is ready. Type a question, or type 'exit' to quit.")
 
@@ -531,18 +843,23 @@ def main() -> None:
         try:
             user_input = input("User: ").strip()
         except (EOFError, KeyboardInterrupt):
+            log_event("Application interrupted while waiting for user input")
             print("\nExiting chatbot.")
             break
 
         if user_input.lower() in {"exit", "quit"}:
+            log_event("User requested application exit")
             print("Exiting chatbot.")
             break
         if not user_input:
             continue
 
+        log_event(f"User input received: {user_input}")
+
         if pending_date_question is not None:
             selected_year = _extract_year(user_input)
             if not selected_year:
+                log_event("Year clarification requested again because input had no 4-digit year")
                 print("Assistant: Please provide a 4-digit year, for example 2026.")
                 continue
             effective_input = f"{pending_date_question} in {selected_year}"
@@ -550,15 +867,19 @@ def main() -> None:
         else:
             if _question_mentions_date_without_year(user_input):
                 pending_date_question = user_input
+                log_event("Date clarification required before processing the question")
                 print("Assistant: Which year do you mean for that date?")
                 continue
             effective_input = user_input
+
+        log_event(f"Effective input sent for processing: {effective_input}")
 
         try:
             response_text = get_chatbot_response(
                 effective_input,
                 conversation_history=conversation_history,
             )
+            log_event("Assistant response generated successfully")
             print(f"Assistant: {response_text}")
             conversation_history.extend(
                 [
@@ -568,8 +889,12 @@ def main() -> None:
             )
             conversation_history = conversation_history[-MAX_HISTORY_MESSAGES:]
         except Exception as exc:
+            log_event(
+                f"Application-level error while answering user input: {exc.__class__.__name__}: {exc}"
+            )
             print(f"Error: {exc}")
 
 
 if __name__ == "__main__":
+    initialize_run_log()
     main()
